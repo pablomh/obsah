@@ -7,6 +7,34 @@ import argparse
 import collections.abc
 
 
+def _validate_forbidden_if_constraint(constraint, variables, args, variable_to_parameter):
+    trigger_arg, trigger_value, forbidden_items = constraint
+    if trigger_arg not in args or getattr(args, trigger_arg) != trigger_value:
+        return []
+
+    violated = []
+    reset_hints = []
+    for item in forbidden_items:
+        if isinstance(item, str):
+            if item in args:
+                violated.append(variable_to_parameter(item))
+                variable = next((v for v in variables if v.name == item), None)
+                if variable and variable.persist:
+                    reset_hints.append(variable.parameter.replace('--', '--reset-', 1))
+        elif isinstance(item, collections.abc.Collection) and len(item) == 2:
+            arg, val = item
+            if arg in args and getattr(args, arg) == val:
+                violated.append(f"{variable_to_parameter(arg)}={val}")
+
+    if violated:
+        msg = f"{violated} are forbidden because {variable_to_parameter(trigger_arg)} is {trigger_value}"
+        if reset_hints:
+            msg += f". Run with {reset_hints} to clear persisted values"
+        return [msg]
+
+    return []
+
+
 def validate_constraints(metadata: dict, args: argparse.Namespace):  # pylint: disable=R0912
     """
     validate arguments passed in on the CLI against constraints from a playbook
@@ -62,28 +90,8 @@ def validate_constraints(metadata: dict, args: argparse.Namespace):  # pylint: d
                 trigger_strs = [f"{variable_to_parameter(name)} contains {value}" for name, value in triggers]
                 errors.append(f"{required} are required because {' and '.join(trigger_strs)}")
 
-    def _validate_forbidden_if_constraint(constraint):
-        trigger_arg, trigger_value, forbidden_items = constraint
-        if trigger_arg not in args or getattr(args, trigger_arg) != trigger_value:
-            return []
-
-        violated = []
-        for item in forbidden_items:
-            if isinstance(item, str):
-                if item in args:
-                    violated.append(variable_to_parameter(item))
-            elif isinstance(item, collections.abc.Collection) and len(item) == 2:
-                arg, val = item
-                if arg in args and getattr(args, arg) == val:
-                    violated.append(f"{variable_to_parameter(arg)}={val}")
-
-        if violated:
-            return [f"{violated} are forbidden because {variable_to_parameter(trigger_arg)} is {trigger_value}"]
-
-        return []
-
     for constraint in constraints.get('forbidden_if', []):
-        errors.extend(_validate_forbidden_if_constraint(constraint))
+        errors.extend(_validate_forbidden_if_constraint(constraint, variables, args, variable_to_parameter))
 
     for constraint in constraints.get('mutually_exclusive', []):
         present_args = [True for arg in constraint if arg in args]
